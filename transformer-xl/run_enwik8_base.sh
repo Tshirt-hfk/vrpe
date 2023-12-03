@@ -1,4 +1,5 @@
 #!/bin/bash
+export CUDA_VISIBLE_DEVICES=0,1,2,3
 
 if [[ $1 == 'train' ]]; then
     echo 'Run training...'
