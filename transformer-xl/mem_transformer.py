@@ -58,6 +58,7 @@ class RelMultiHeadAttn(nn.Module):
         self.d_model = d_model
         self.d_head = d_head
         self.dropout = dropout
+        self.attn_span = attn_span
 
         self.qkv_net = nn.Linear(d_model, 3 * n_head * d_head, bias=False)
 
@@ -124,8 +125,9 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
         super(RelPartialLearnableMultiHeadAttn, self).__init__(*args, **kwargs)
 
         self.r_net = nn.Linear(self.d_model, self.n_head * self.d_head, bias=False)
+        self.v_rpe = nn.Parameter(torch.zeros(self.attn_span, self.n_head, self.d_head))
 
-    def forward(self, w, r, r_w_bias, r_r_bias, attn_mask=None, mems=None):
+    def forward(self, w, r, r_w_bias, r_r_bias, rel_pos=None, rel_pos_mask=None, attn_mask=None, mems=None):
         qlen, rlen, bsz = w.size(0), r.size(0), w.size(1)
 
         if mems is not None:
@@ -183,6 +185,10 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
         #### compute attention vector
         attn_vec = torch.einsum('ijbn,jbnd->ibnd', (attn_prob, w_head_v))
 
+        if rel_pos is not None and rel_pos_mask is not None:
+            rel_attn_prob = torch.gather(attn_prob, dim=1, index=rel_pos)
+            attn_vec = attn_vec + torch.einsum('isbn,snd->ibnd', (rel_attn_prob, self.v_rpe))
+
         # [qlen x bsz x n_head x d_head]
         attn_vec = attn_vec.contiguous().view(
             attn_vec.size(0), attn_vec.size(1), self.n_head * self.d_head)
@@ -211,9 +217,10 @@ class RelPartialLearnableDecoderLayer(nn.Module):
         self.feed_forward = PositionwiseFeedForward(d_model, d_inner, dropout, 
                                     pre_lnorm=kwargs.get('pre_lnorm'))
 
-    def forward(self, dec_inp, r, r_w_bias, r_r_bias, dec_attn_mask=None, mems=None):
+    def forward(self, dec_inp, r, r_w_bias, r_r_bias, rel_pos=None, rel_pos_mask=None, dec_attn_mask=None, mems=None):
 
         output = self.dec_attn(dec_inp, r, r_w_bias, r_r_bias,
+                               rel_pos=rel_pos, rel_pos_mask=rel_pos_mask,
                                attn_mask=dec_attn_mask,
                                mems=mems)
         
@@ -243,7 +250,6 @@ class MemTransformerLM(nn.Module):
         self.pos_emb = PositionalEmbedding(self.d_model)
         self.r_w_bias = nn.Parameter(torch.Tensor(self.n_head, self.d_head))
         self.r_r_bias = nn.Parameter(torch.Tensor(self.n_head, self.d_head))
-
 
         self.layers = nn.ModuleList()
         for i in range(n_layer):
@@ -286,7 +292,7 @@ class MemTransformerLM(nn.Module):
         return new_mems
 
     def _forward(self, input_ids, mems=None):
-        qlen = input_ids.size(0)
+        qlen, bsz = input_ids.size()
 
         word_emb = self.word_emb(input_ids)
 
@@ -297,8 +303,16 @@ class MemTransformerLM(nn.Module):
                          torch.tril(all_ones, mlen-self.attn_span))[:, :, None] # -1
 
         pos_seq = torch.arange(klen-1, -1, -1, device=word_emb.device,
-                               dtype=input_ids.dtype).clamp(max=self.attn_span)
+                               dtype=torch.long).clamp(max=self.attn_span)
         pos_emb = self.pos_emb(pos_seq)
+
+        rel_pos = torch.arange(qlen, device=word_emb.device, dtype=torch.long)[:,None] + \
+                    torch.arange(mlen, mlen-self.attn_span, -1, device=word_emb.device, dtype=torch.long)
+        rel_pos_mask = (rel_pos >= 0).type_as(pos_emb)
+        rel_pos_mask = rel_pos_mask.view(qlen, self.attn_span, 1, 1).expand(-1, -1, bsz, self.n_head)
+        rel_pos = rel_pos.clamp(min=0)
+        rel_pos = rel_pos.view(qlen, self.attn_span, 1, 1).expand(-1, -1, bsz, self.n_head)
+        
 
         layer_out = torch.dropout(word_emb, p=self.dropout, train=self.training)
         pos_emb = torch.dropout(pos_emb, p=self.dropout, train=self.training)
@@ -306,7 +320,8 @@ class MemTransformerLM(nn.Module):
         hids = [layer_out]
         for i, layer in enumerate(self.layers):
             layer_out = layer(layer_out, pos_emb, self.r_w_bias,
-                    self.r_r_bias, dec_attn_mask=dec_attn_mask, mems=mems[i])
+                    self.r_r_bias, rel_pos=rel_pos, rel_pos_mask=rel_pos_mask,
+                    dec_attn_mask=dec_attn_mask, mems=mems[i])
             hids.append(layer_out)
 
         layer_out = torch.dropout(layer_out, p=self.dropout, train=self.training)
