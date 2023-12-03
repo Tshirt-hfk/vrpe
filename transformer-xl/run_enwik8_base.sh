@@ -17,9 +17,9 @@ if [[ $1 == 'train' ]]; then
         --lr 0.00025 \
         --warmup_step 0 \
         --max_step 400000 \
-        --tgt_len 512 \
-        --mem_len 512 \
-        --eval_tgt_len 128 \
+        --seq_len 512 \
+        --attn_span 512 \
+        --eval_seq_len 128 \
         --batch_size 22 \
         --multi_gpu \
         --gpu0_bsz 4 \
@@ -30,10 +30,8 @@ elif [[ $1 == 'eval' ]]; then
         --cuda \
         --data ./data/enwik8/ \
         --dataset enwik8 \
-        --tgt_len 80 \
-        --mem_len 2100 \
-        --clamp_len 820 \
-        --same_length \
+        --seq_len 80 \
+        --attn_span 512 \
         --split test \
         ${@:2}
 else

@@ -18,9 +18,9 @@ if [[ $1 == 'train' ]]; then
         --lr 0.00025 \
         --warmup_step 0 \
         --max_step 200000 \
-        --tgt_len 150 \
-        --mem_len 150 \
-        --eval_tgt_len 150 \
+        --seq_len 150 \
+        --attn_span 150 \
+        --eval_seq_len 150 \
         --batch_size 60 \
         --multi_gpu \
         --gpu0_bsz 4 \
@@ -31,10 +31,8 @@ elif [[ $1 == 'eval' ]]; then
         --cuda \
         --data ./data/wikitext-103/ \
         --dataset wt103 \
-        --tgt_len 64 \
-        --mem_len 640 \
-        --clamp_len 400 \
-        --same_length \
+        --seq_len 64 \
+        --attn_span 150 \
         --split test \
         ${@:2}
 else

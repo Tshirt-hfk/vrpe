@@ -76,14 +76,14 @@ parser.add_argument('--batch_size', type=int, default=60,
                     help='batch size')
 parser.add_argument('--batch_chunk', type=int, default=1,
                     help='split batch into chunks to save memory')
-parser.add_argument('--tgt_len', type=int, default=70,
+parser.add_argument('--seq_len', type=int, default=70,
                     help='number of tokens to predict')
-parser.add_argument('--eval_tgt_len', type=int, default=50,
+parser.add_argument('--eval_seq_len', type=int, default=50,
                     help='number of tokens to predict for evaluation')
 parser.add_argument('--ext_len', type=int, default=0,
                     help='length of the extended context')
-parser.add_argument('--mem_len', type=int, default=0,
-                    help='length of the retained previous heads')
+parser.add_argument('--attn_span', type=int, default=0,
+                    help='the span of attention')
 parser.add_argument('--not_tied', action='store_true',
                     help='do not tie the word embedding and softmax weights')
 parser.add_argument('--seed', type=int, default=1111,
@@ -112,21 +112,12 @@ parser.add_argument('--restart_dir', type=str, default='',
                     help='restart dir')
 parser.add_argument('--debug', action='store_true',
                     help='run in debug mode (do not create exp dir)')
-parser.add_argument('--same_length', action='store_true',
-                    help='use the same attn length for all tokens')
-parser.add_argument('--attn_type', type=int, default=0,
-                    help='attention type. 0 for ours, 1 for Shaw et al,'
-                    '2 for Vaswani et al, 3 for Al Rfou et al.')
-parser.add_argument('--clamp_len', type=int, default=-1,
-                    help='use the same pos embeddings after clamp_len')
 parser.add_argument('--eta_min', type=float, default=0.0,
                     help='min learning rate for cosine scheduler')
 parser.add_argument('--gpu0_bsz', type=int, default=-1,
                     help='batch size on gpu 0')
 parser.add_argument('--max_eval_steps', type=int, default=-1,
                     help='max eval steps')
-parser.add_argument('--sample_softmax', type=int, default=-1,
-                    help='number of samples in sampled softmax')
 parser.add_argument('--patience', type=int, default=0,
                     help='patience')
 parser.add_argument('--finetune_v2', action='store_true',
@@ -186,11 +177,11 @@ ntokens = len(corpus.vocab)
 args.n_token = ntokens
 
 eval_batch_size = 10
-tr_iter = corpus.get_iterator('train', args.batch_size, args.tgt_len,
+tr_iter = corpus.get_iterator('train', args.batch_size, args.seq_len,
     device=device, ext_len=args.ext_len)
-va_iter = corpus.get_iterator('valid', eval_batch_size, args.eval_tgt_len,
+va_iter = corpus.get_iterator('valid', eval_batch_size, args.eval_seq_len,
     device=device, ext_len=args.ext_len)
-te_iter = corpus.get_iterator('test', eval_batch_size, args.eval_tgt_len,
+te_iter = corpus.get_iterator('test', eval_batch_size, args.eval_seq_len,
     device=device, ext_len=args.ext_len)
 
 # adaptive softmax / embedding
@@ -274,12 +265,9 @@ if args.restart:
     model.apply(update_dropatt)
 else:
     model = MemTransformerLM(ntokens, args.n_layer, args.n_head, args.d_model,
-        args.d_head, args.d_inner, args.dropout, args.dropatt,
-        tie_weight=args.tied, d_embed=args.d_embed, div_val=args.div_val,
-        tie_projs=tie_projs, pre_lnorm=args.pre_lnorm, tgt_len=args.tgt_len,
-        ext_len=args.ext_len, mem_len=args.mem_len, cutoffs=cutoffs,
-        same_length=args.same_length, attn_type=args.attn_type,
-        clamp_len=args.clamp_len, sample_softmax=args.sample_softmax)
+                args.d_head, args.d_inner, args.dropout, args.dropatt,
+                tie_weight=args.tied, d_embed=args.d_embed, div_val=args.div_val,
+                tie_projs=tie_projs, pre_lnorm=args.pre_lnorm, attn_span=args.attn_span, cutoffs=cutoffs)
     model.apply(weights_init)
     model.word_emb.apply(weights_init) # ensure embedding init is not overridden by out_layer in case of weight sharing
 args.n_all_param = sum([p.nelement() for p in model.parameters()])
@@ -300,30 +288,9 @@ else:
 
 #### optimizer
 if args.optim.lower() == 'sgd':
-    if args.sample_softmax > 0:
-        dense_params, sparse_params = [], []
-        for param in model.parameters():
-            if param.size() == model.word_emb.weight.size():
-                sparse_params.append(param)
-            else:
-                dense_params.append(param)
-        optimizer_sparse = optim.SGD(sparse_params, lr=args.lr * 2)
-        optimizer = optim.SGD(dense_params, lr=args.lr, momentum=args.mom)
-    else:
-        optimizer = optim.SGD(model.parameters(), lr=args.lr,
-            momentum=args.mom)
+    optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.mom)
 elif args.optim.lower() == 'adam':
-    if args.sample_softmax > 0:
-        dense_params, sparse_params = [], []
-        for param in model.parameters():
-            if param.size() == model.word_emb.weight.size():
-                sparse_params.append(param)
-            else:
-                dense_params.append(param)
-        optimizer_sparse = optim.SparseAdam(sparse_params, lr=args.lr)
-        optimizer = optim.Adam(dense_params, lr=args.lr)
-    else:
-        optimizer = optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = optim.Adam(model.parameters(), lr=args.lr)
 elif args.optim.lower() == 'adagrad':
     optimizer = optim.Adagrad(model.parameters(), lr=args.lr)
 
@@ -334,9 +301,6 @@ if args.scheduler == 'cosine':
     # rather than the default value of lr_min 1e-6
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer,
         args.max_step, eta_min=args.eta_min) # should use eta_min arg
-    if args.sample_softmax > 0:
-        scheduler_sparse = optim.lr_scheduler.CosineAnnealingLR(optimizer_sparse,
-            args.max_step, eta_min=args.eta_min) # should use eta_min arg
 elif args.scheduler == 'inv_sqrt':
     # originally used for Transformer (in Attention is all you need)
     def lr_lambda(step):
@@ -350,9 +314,6 @@ elif args.scheduler == 'inv_sqrt':
 elif args.scheduler == 'dev_perf':
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer,
         factor=args.decay_rate, patience=args.patience, min_lr=args.lr_min)
-    if args.sample_softmax > 0:
-        scheduler_sparse = optim.lr_scheduler.ReduceLROnPlateau(optimizer_sparse,
-            factor=args.decay_rate, patience=args.patience, min_lr=args.lr_min)
 elif args.scheduler == 'constant':
     pass
 
@@ -387,15 +348,6 @@ def evaluate(eval_iter):
     # Turn on evaluation mode which disables dropout.
     model.eval()
 
-    # If the model does not use memory at all, make the ext_len longer.
-    # Otherwise, make the mem_len longer and keep the ext_len the same.
-    if args.mem_len == 0:
-        model.reset_length(args.eval_tgt_len,
-            args.ext_len+args.tgt_len-args.eval_tgt_len, args.mem_len)
-    else:
-        model.reset_length(args.eval_tgt_len,
-            args.ext_len, args.mem_len+args.tgt_len-args.eval_tgt_len)
-
     # Evaluation
     total_len, total_loss = 0, 0.
     with torch.no_grad():
@@ -410,7 +362,6 @@ def evaluate(eval_iter):
             total_len += seq_len
 
     # Switch back to the training mode
-    model.reset_length(args.tgt_len, args.ext_len, args.mem_len)
     model.train()
 
     return total_loss / total_len
@@ -457,8 +408,6 @@ def train():
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
 
         optimizer.step()
-        if args.sample_softmax > 0:
-            optimizer_sparse.step()
 
         # step-wise learning rate annealing
         train_step += 1
@@ -467,13 +416,9 @@ def train():
             if train_step < args.warmup_step:
                 curr_lr = args.lr * train_step / args.warmup_step
                 optimizer.param_groups[0]['lr'] = curr_lr
-                if args.sample_softmax > 0:
-                    optimizer_sparse.param_groups[0]['lr'] = curr_lr * 2
             else:
                 if args.scheduler == 'cosine':
                     scheduler.step(train_step)
-                    if args.sample_softmax > 0:
-                        scheduler_sparse.step(train_step)
         elif args.scheduler == 'inv_sqrt':
             scheduler.step(train_step)
 
@@ -517,8 +462,6 @@ def train():
             # dev-performance based learning rate annealing
             if args.scheduler == 'dev_perf':
                 scheduler.step(val_loss)
-                if args.sample_softmax > 0:
-                    scheduler_sparse.step(val_loss)
 
             eval_start_time = time.time()
 
