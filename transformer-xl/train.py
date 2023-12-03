@@ -418,9 +418,9 @@ def train():
                 optimizer.param_groups[0]['lr'] = curr_lr
             else:
                 if args.scheduler == 'cosine':
-                    scheduler.step(train_step)
+                    scheduler.step()
         elif args.scheduler == 'inv_sqrt':
-            scheduler.step(train_step)
+            scheduler.step()
 
         if train_step % args.log_interval == 0:
             cur_loss = train_loss / args.log_interval
