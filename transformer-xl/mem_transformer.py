@@ -186,7 +186,7 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
         attn_vec = torch.einsum('ijbn,jbnd->ibnd', (attn_prob, w_head_v))
 
         if rel_pos is not None and rel_pos_mask is not None:
-            rel_attn_prob = torch.gather(attn_prob, dim=1, index=rel_pos)
+            rel_attn_prob = torch.gather(attn_prob, dim=1, index=rel_pos) * rel_pos_mask
             attn_vec = attn_vec + torch.einsum('isbn,snd->ibnd', (rel_attn_prob, self.v_rpe))
 
         # [qlen x bsz x n_head x d_head]
