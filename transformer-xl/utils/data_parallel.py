@@ -1,4 +1,4 @@
-
+# coding: utf-8
 import torch
 from torch.nn.parallel import DataParallel
 from torch.nn.parallel._functions import Scatter

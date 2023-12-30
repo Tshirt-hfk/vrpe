@@ -6,16 +6,16 @@ from utils.vocabulary import Vocab
 
 
 class LMOrderedIterator(object):
-    def __init__(self, data, bsz, bptt, device='cpu', ext_len=None):
+    def __init__(self, data, bsz, bptt, device='cpu', ext_len=0):
         """
             data -- LongTensor -- the LongTensor is strictly ordered
         """
         self.bsz = bsz
         self.bptt = bptt
-        self.ext_len = ext_len if ext_len is not None else 0
+        self.ext_len = ext_len
 
         self.device = device
-
+        
         # Work out how cleanly we can divide the dataset into bsz parts.
         self.n_step = data.size(0) // bsz
 
@@ -61,7 +61,7 @@ class LMOrderedIterator(object):
 
 
 class LMShuffledIterator(object):
-    def __init__(self, data, bsz, bptt, device='cpu', ext_len=None, shuffle=False):
+    def __init__(self, data, bsz, bptt, device='cpu', ext_len=0, shuffle=False):
         """
             data -- list[LongTensor] -- there is no order among the LongTensors
         """
@@ -69,7 +69,7 @@ class LMShuffledIterator(object):
 
         self.bsz = bsz
         self.bptt = bptt
-        self.ext_len = ext_len if ext_len is not None else 0
+        self.ext_len = ext_len
 
         self.device = device
         self.shuffle = shuffle
@@ -141,7 +141,7 @@ class LMShuffledIterator(object):
 
 
 class LMMultiFileIterator(LMShuffledIterator):
-    def __init__(self, paths, vocab, bsz, bptt, device='cpu', ext_len=None,
+    def __init__(self, paths, vocab, bsz, bptt, device='cpu', ext_len=0,
         shuffle=False):
 
         self.paths = paths
@@ -149,7 +149,7 @@ class LMMultiFileIterator(LMShuffledIterator):
 
         self.bsz = bsz
         self.bptt = bptt
-        self.ext_len = ext_len if ext_len is not None else 0
+        self.ext_len = ext_len
 
         self.device = device
         self.shuffle = shuffle
@@ -261,12 +261,21 @@ def get_lm_corpus(datadir, dataset):
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description='unit test')
-    parser.add_argument('--datadir', type=str, default='../data/text8',
+    parser.add_argument('--datadir', type=str, default='./data/enwik8',
                         help='location of the data corpus')
-    parser.add_argument('--dataset', type=str, default='text8',
+    parser.add_argument('--dataset', type=str, default='enwik8',
                         choices=['ptb', 'wt2', 'wt103', 'lm1b', 'enwik8', 'text8'],
                         help='dataset name')
     args = parser.parse_args()
 
     corpus = get_lm_corpus(args.datadir, args.dataset)
     print('Vocab size : {}'.format(len(corpus.vocab.idx2sym)))
+
+    tr_iter = corpus.get_iterator('train', 8, 256, 0)
+    train_iter = tr_iter.get_varlen_iter()
+    for idx, (data, target, seq_len) in enumerate(train_iter):
+        print(idx)
+        print(data, data.size())
+        print(target, target.size())
+        print(seq_len)
+        break
