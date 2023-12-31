@@ -323,13 +323,12 @@ def evaluate(eval_iter):
     # Evaluation
     total_len, total_loss = 0, 0.
     with torch.no_grad():
-        mems = tuple()
+        mems = None
         for i, (data, target, seq_len) in enumerate(eval_iter):
             if args.max_eval_steps > 0 and i >= args.max_eval_steps:
                 break
-            ret = model(data, *mems)
-            logit, mems = ret[0], ret[1:]
-            loss = model.cal_loss(logit, target).mean()
+            ret = model(data, mems)
+            _, mems, loss = ret[0], ret[1], ret[2]
             total_loss += seq_len * loss.float().item()
             total_len += seq_len
 
